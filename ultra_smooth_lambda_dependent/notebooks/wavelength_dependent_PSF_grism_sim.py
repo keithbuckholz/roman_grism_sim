@@ -11,7 +11,15 @@ import webbpsf.roman
 import argparse
 import os
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
+
+"""
+This script is designed to be run either from the command line, which saves a fits with the star dispersion, or
+imported and run in a notebook, which returns a GrismFLT object containing the dispersion.
+
+To run from notebook, run create_objects_for_disperse_function with appropriate arguments. This returns a dictionary
+with the args for disperse_one_star. 
+"""
 
 def chunk(spec, start_wave, end_wave):
     """
@@ -167,14 +175,15 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
             flux[-spectrum_overlap:] *= back_y
 
         # TODO Simulate multiple stars?
-        #? Dispersing in_place causes negatives and casts a shadow?
-        #? Adding individual dispersions on my own seems to fix the problem, but why?
 
         #! Block for in_place sim
-        #* If using the manual collection method below, you must comment the in_place out
-        #* Failure to comment this line out with result in negative/incorrect values at the tail end of the dispersion
         # roman.compute_model_orders(id=1, mag=1, compute_size=False, size=77, is_cgs=True, store=False, 
         #                            in_place=True, spectrum_1d=[wave, flux])
+
+        #? Dispersing in_place causes negatives and casts a shadow?
+        #? Adding individual dispersions on my own seems to fix the problem, but why?
+        #* If using the manual collection method below, you must comment out the in_place method
+        #* Failure to comment this line out with result in negative/incorrect values at the tail end of the dispersion
         #! /block
 
         #! Block for cumulative sim in my own "net"/capture array
@@ -194,8 +203,9 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
         del flux
         del wave
 
-    #! returning tuple for troubleshooting purposes
-    return (roman, list_of_dispersions)
+    #! Troubleshooting step
+    # return (roman, list_of_dispersions)
+    return roman
 
 def create_objects_for_disperse_function(empty_fits_dir=None, spectrum_file=None, bandpass_file=None, 
                                          magnitude=6, spectrum_overlap=10, npsfs=20, 
