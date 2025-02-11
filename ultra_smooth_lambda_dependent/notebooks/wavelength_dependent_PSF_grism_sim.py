@@ -44,7 +44,40 @@ def chunk(spec, start_wave, end_wave):
 
     return chunk_spec
 
-def interp_in_range_spec(src) -> Table:
+def psf_bounds(pad, detector_position, half_psf_size) -> tuple:
+    """
+    Locate the x and y bounds on the detector for placing the psf onto the direct image array.
+
+    Parameters
+    ----------
+    pad: tuple
+        GrismFLT padding (y,x). Set equal GrismFLT.pad (i.e. roman.pad)
+
+    detector_position: tuple
+        Detector position of the star (y,x).
+    """
+
+    # Pad indicies are stored as (y, x); detector position tuple chosen to match
+    x_lower = (pad[1] + detector_position[1]) - half_psf_size
+    x_upper = (pad[1] + detector_position[1]) + half_psf_size
+    y_lower = (pad[0] + detector_position[0]) - half_psf_size
+    y_upper = (pad[0] + detector_position[0]) + half_psf_size
+
+    bounds = (y_lower, y_upper, x_lower, x_upper)
+
+    return bounds
+
+def interp_and_truncate_spec(src) -> Table:
+    """
+    Takes a pysynphot spectrum array. Truncates it, reinterpolates it at every angstrom, and returns it as an 
+    astropy table with columns "wave" and "flux".
+
+    Parameters
+    ----------
+
+    src: pysynphot.ArraySpectrum
+        Pysynphot ArraySpectrum object extending between at least 10000-20000 Angstroms.
+    """
     # Three steps in rapid sequence/all mixed together
     # 1) Extract only the relevant part of the spectrum (from 10000 to 20000 angstroms)
     # 2) Interpolate so that each data point is 1 angstrom apart
@@ -82,7 +115,7 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
     detector_position: tuple
         Detector x and y position of the star.
     """
-    # Parse args and asserts
+    # Parse args and assertions
     # Enforce int type
     spectrum_overlap = int(spectrum_overlap) # overlap extent; data points
     npsfs = int(npsfs) # number of distinct psfs
@@ -94,64 +127,35 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
            "detector_position arg must be a tuple like (y_position, x_position)"
 
     # Interpolates spectrum to every angstrom and returns only 10000-20000 angstroms
-    spec = interp_in_range_spec(src)
+    spec = interp_and_truncate_spec(src)
 
+    # Setup roll-on/roll-off shape
     window_x = np.linspace(0, np.pi, spectrum_overlap)
     front_y = (1 - np.cos(window_x)) / 2
     back_y = 1 - front_y
 
+    # Determine start wavelength of every bin
     bins = np.linspace(10000, 20000, npsfs + 1)
 
-    piecemeal_sim = np.zeros_like(roman.model)
-
+    # Initialize zero arrays
     full_dispersion = np.zeros_like(roman.model)
-
-    #! Troubleshooting Step
-    list_of_dispersions = []
     
+    # Dipserse each segment one-at-a-time and add each bit to the full_dispersion array
     for ii, start_wave in enumerate(bins[:-1]):
-
         end_wave = bins[ii+1]
 
         # Confirmed in the docs; "Wavelengths are always specified in meters"
         psf = wfi.calc_psf(monochromatic=(start_wave * (10**-10)), fov_pixels=182, oversample=1, source=src)[0].data
 
+        # Determine where to place the psf on the detector
+        bounds = psf_bounds(pad=roman.pad, detector_position=detector_position, half_psf_size=half_psf_thumb)
 
         direct = np.zeros_like(roman.model)
-
-        # Indexes are (y, x) because that's how grizli did it. 
-        x_lower = (roman.pad[1] + detector_position[1]) - half_psf_thumb
-        x_upper = (roman.pad[1] + detector_position[1]) + half_psf_thumb
-        y_lower = (roman.pad[0] + detector_position[0]) - half_psf_thumb
-        y_upper = (roman.pad[0] + detector_position[0]) + half_psf_thumb
-
-        direct[y_lower:y_upper, x_lower:x_upper] = psf
-
-        # #! troubleshooting
-        # plt.imshow(psf, origin='lower', cmap='hot')
-        # plt.title(f"psf")
-        # plt.show()
-
-        # plt.imshow(direct[0:200, 0:200], origin='lower', cmap='hot')
-        # plt.title(f"direct")
-        # plt.show()
-        # #! /troubleshooting
+        direct[bounds[0]:bounds[1], bounds[2]:bounds[3]] = psf
 
         # Enforce float32 dtype in GrismFLT object and build seg map
         roman.direct.data["SCI"] = direct.astype("float32")
         roman.seg = np.where(roman.direct.data["SCI"], 1, 0).astype("float32") # TODO: is there a much faster option?
-
-        # #! troubleshooting
-        # plt.imshow(roman.direct.data["SCI"][0:200, 0:200], origin='lower', cmap='hot')
-        # plt.title(f"roman direct")
-        # plt.show()
-
-        # plt.imshow(roman.seg[0:200, 0:200], vmin=0, vmax=2, origin='lower', cmap='hot')
-        # plt.title(f"seg")
-        # plt.show()
-
-        # print(f"seg shape: {roman.seg.shape}", f"\n", f"nan?: {np.any(np.isnan(roman.seg))}", f"\n", f"val?: {roman.seg[150, 150]}")
-        # #! /troubleshooting
 
         start_wave -= spectrum_overlap * 0.5
         end_wave += spectrum_overlap * 0.5 - 1
@@ -167,7 +171,7 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
         wave = chunk_spec["wave"]
         flux = chunk_spec["flux"]
 
-        # apodize
+        # apodize/roll-on, roll-off
         if start_wave != 10000:
             flux[:spectrum_overlap] *= front_y
 
@@ -187,24 +191,19 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
         #! /block
 
         #! Block for cumulative sim in my own "net"/capture array
-        part_of_a_dispersion = roman.compute_model_orders(id=1, mag=1, compute_size=False, size=200, is_cgs=True, store=False, 
+        segment_of_dispersion = roman.compute_model_orders(id=1, mag=1, compute_size=False, size=200, is_cgs=True, store=False, 
                                                           in_place=False, spectrum_1d=[wave, flux])
         
         #* Comment either these two lines or the in_place block to switch collection methods
-        full_dispersion += part_of_a_dispersion[1]
-        roman.model = full_dispersion
+        full_dispersion += segment_of_dispersion[1]
         #! /block
-
-        #! Troubleshooting step
-        list_of_dispersions.append(part_of_a_dispersion[1])
 
         # These deletions are unnecessary
         del chunk_spec
         del flux
         del wave
 
-    #! Troubleshooting step
-    # return (roman, list_of_dispersions)
+    roman.model = full_dispersion
     return roman
 
 def create_objects_for_disperse_function(empty_fits_dir=None, spectrum_file=None, bandpass_file=None, 
@@ -254,7 +253,7 @@ def create_objects_for_disperse_function(empty_fits_dir=None, spectrum_file=None
         empty_seg = os.path.join(empty_fits_dir, "empty_seg.fits")
 
     else:
-        # TODO Call make_empty.py
+        # TODO Implement some make_empty
         None
 
     # Instantiate WebbPSF object
@@ -284,7 +283,7 @@ def create_objects_for_disperse_function(empty_fits_dir=None, spectrum_file=None
 
 def main() -> None:
     """
-    Parse args and call disperse_one_star with CLI_mode on.
+    Parse args and call disperse_one_star, save result in fits file
     """
     # Initialize arg parser to assist with command line arguments
     parser = argparse.ArgumentParser()
@@ -330,13 +329,11 @@ def main() -> None:
                                                              detector_position=args.detector_position,
                                                              psf_thumbnail_size=args.psf_thumbnail_size)
 
-    roman_sim = disperse_one_star(args_for_disperse)
+    roman = disperse_one_star(args_for_disperse)
 
     # Save results
-
-    # pad is also used but hardcoded here
-    pad = roman_sim.pad
-    upright_img = np.rot90(roman_sim.model[pad:-pad,pad:-pad])
+    pad = roman.pad
+    upright_img = np.rot90(roman.model[pad:-pad,pad:-pad])
     ImageHDU = fits.ImageHDU(data=upright_img, name="SCI")
     ImageHDU.writeto(args.save_file, overwrite=True)
         
