@@ -151,11 +151,12 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
         bounds = psf_bounds(pad=roman.pad, detector_position=detector_position, half_psf_size=half_psf_thumb)
 
         direct = np.zeros_like(roman.model)
-        direct[bounds[0]:bounds[1], bounds[2]:bounds[3]] = psf
+        direct[bounds[0]:bounds[1], bounds[2]:bounds[3]] = np.rot90(psf, k=3) # PSF made using non-rotated coordinates
 
         # Enforce float32 dtype in GrismFLT object and build seg map
         roman.direct.data["SCI"] = direct.astype("float32")
-        roman.seg = np.where(roman.direct.data["SCI"], 1, 0).astype("float32") # TODO: is there a much faster option?
+        roman.seg = np.where(roman.direct.data["SCI"], 1, 0).astype("float32") # Segmentation map is made on rotated direct image
+        # TODO: is there a notably faster option than np.where?
 
         start_wave -= spectrum_overlap * 0.5
         end_wave += spectrum_overlap * 0.5 - 1
