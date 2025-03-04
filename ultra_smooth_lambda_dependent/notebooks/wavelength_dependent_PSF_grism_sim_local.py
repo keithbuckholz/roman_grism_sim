@@ -96,7 +96,7 @@ def interp_and_truncate_spec(src) -> Table:
     return spec
 
 
-def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_position, psf_thumbnail_size) -> GrismFLT:
+def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_position, psf_thumbnail_size, size) -> GrismFLT:
     """
     Produce dipsered model. Saves model in the GrismFLT object. Returns that object.
 
@@ -192,7 +192,7 @@ def disperse_one_star(roman, wfi, src, spectrum_overlap, npsfs, detector_positio
         #! /block
 
         #! Block for cumulative sim in my own "net"/capture array
-        segment_of_dispersion = roman.compute_model_orders(id=1, mag=1, compute_size=False, size=200, is_cgs=True, store=False, 
+        segment_of_dispersion = roman.compute_model_orders(id=1, mag=1, compute_size=False, size=size, is_cgs=True, store=False, 
                                                           in_place=False, spectrum_1d=[wave, flux])
         
         #* Comment either these two lines or the in_place block to switch collection methods
@@ -275,6 +275,7 @@ def create_objects_for_disperse_function(empty_fits_dir=None, spectrum_file=None
     else:
         pad = 0
     pad = max(pad, 200) # pad must be as large or larger than the size cutout to avoid failures at the edges
+    pad = 1000
 
     roman = GrismFLT(direct_file=empty_direct, seg_file=empty_seg, pad=pad)
 
